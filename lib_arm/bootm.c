@@ -179,7 +179,7 @@ int do_bootm_linux(int flag, int argc, char *argv[], bootm_headers_t *images)
 
 	announce_and_cleanup();
 
-	kernel_entry(0, machid, bd->bi_boot_params);
+	kernel_entry(0, machid, 0xA0000200);
 	/* does not return */
 
 	return 1;

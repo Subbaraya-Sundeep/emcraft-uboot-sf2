@@ -145,6 +145,8 @@ struct mss_spi {
 	u32	slave_select;
 	u32	mis;
 	u32	ris;
+	u32	control2;
+	u32	command;
 };
 
  /*
@@ -433,7 +435,7 @@ struct spi_slave *spi_setup_slave(unsigned int b, unsigned int cs,
 		s->rst_clr = M2S_SYS_SOFT_RST_CR_SPI1;
 	}
 
-	d_printk(2, "bus=%d,regs=%p,cs=%d,hz=%d,mode=0x%x\n",
+	d_printk(3, "bus=%d,regs=%p,cs=%d,hz=%d,mode=0x%x\n",
 		b, s->regs, cs, hz, m);
 
 done :
@@ -562,6 +564,202 @@ void spi_release_bus(struct spi_slave *slv)
 	d_printk(2, "slv=%p\n", slv);
 }
 
+#define PROTOCOL_MODE_MASK  ((uint32_t)0x0300000Cu)
+
+/***************************************************************************//**
+ * Mask of theframe count bits within the SPI control register.
+ */
+#define TXRXDFCOUNT_MASK    ((uint32_t)0x00FFFF00u)
+#define TXRXDFCOUNT_SHIFT   ((uint32_t)8u)
+
+/***************************************************************************//**
+ * SPI hardware FIFO depth.
+ */
+#define RX_FIFO_SIZE    4u
+#define BIG_FIFO_SIZE   32u
+
+/***************************************************************************//**
+ * 
+ */
+#define RX_IRQ_THRESHOLD    (BIG_FIFO_SIZE / 2u)
+
+/***************************************************************************//**
+  Marker used to detect that the configuration has not been selected for a
+  specific slave when operating as a master.
+ */
+#define NOT_CONFIGURED  0xFFFFFFFFu
+
+/***************************************************************************//**
+ * CONTROL register bit masks
+ */
+#define CTRL_ENABLE_MASK    0x00000001u
+#define CTRL_MASTER_MASK    0x00000002u
+
+/***************************************************************************//**
+  Registers bit masks
+ */
+/* CONTROL register. */
+#define MASTER_MODE_MASK        0x00000002u
+#define CTRL_RX_IRQ_EN_MASK     0x00000010u
+#define CTRL_TX_IRQ_EN_MASK     0x00000020u
+#define CTRL_OVFLOW_IRQ_EN_MASK 0x00000040u
+#define CTRL_URUN_IRQ_EN_MASK   0x00000080u
+#define CTRL_REG_RESET_MASK     0x80000000u
+#define BIGFIFO_MASK            0x20000000u
+#define CTRL_CLKMODE_MASK       0x10000000u
+#define SPS_MASK                0x04000000u
+
+/* CONTROL2 register */
+#define C2_ENABLE_CMD_IRQ_MASK     0x00000010u
+#define C2_ENABLE_SSEND_IRQ_MASK   0x00000020u
+
+/* STATUS register */
+#define TX_DONE_MASK            0x00000001u
+#define rx_data_READY_MASK      0x00000002u
+#define RX_OVERFLOW_MASK        0x00000004u
+#define RX_FIFO_EMPTY_MASK      0x00000040u
+#define TX_FIFO_FULL_MASK       0x00000100u
+#define TX_FIFO_EMPTY_MASK      0x00000400u
+
+/* MIS register. */
+#define TXDONE_IRQ_MASK         0x00000001u
+#define RXDONE_IRQ_MASK         0x00000002u
+#define RXOVFLOW_IRQ_MASK       0x00000004u
+#define TXURUN_IRQ_MASK         0x00000008u
+#define CMD_IRQ_MASK            0x00000010u
+#define SSEND_IRQ_MASK          0x00000020u
+
+/* COMMAND register */
+#define AUTOFILL_MASK           0x00000001u
+#define TX_FIFO_RESET_MASK      0x00000008u
+#define RX_FIFO_RESET_MASK      0x00000004u
+
+
+void MSS_SPI_transfer_block
+(
+    struct m2s_spi_slave *s,
+    const unsigned char * cmd_buffer,
+    unsigned int cmd_byte_size,
+    unsigned char * rd_buffer,
+    unsigned int rd_byte_size
+)
+{
+    uint16_t transfer_idx = 0u;
+    uint16_t tx_idx;
+    uint16_t rx_idx;
+    uint32_t frame_count;
+    volatile uint32_t rx_raw;
+    uint16_t transit = 0u;
+    uint32_t tx_fifo_full;
+    uint32_t rx_overflow;
+    uint32_t rx_fifo_empty;
+    
+    uint16_t transfer_size;     /* Total number of bytes transfered. */
+    
+    /* Compute number of bytes to transfer. */
+    transfer_size = cmd_byte_size + rd_byte_size;
+    
+//	printf("transfer_size:%d\n", transfer_size);
+    /* Adjust to 1 byte transfer to cater for DMA transfers. */
+    if(0u == transfer_size)
+    {
+        frame_count = 1u;
+    }
+    else
+    {
+        frame_count = transfer_size;
+    }
+
+    /* Flush the Tx and Rx FIFOs. */
+    MSS_SPI(s)->command |= (TX_FIFO_RESET_MASK | RX_FIFO_RESET_MASK);
+    
+    /* Recover from receive overflow. */
+    rx_overflow = MSS_SPI(s)->status & RX_OVERFLOW_MASK;
+    if(rx_overflow)
+    {
+      //   recover_from_rx_overflow(MSS_SPI(s));
+    }
+    
+    /* Set frame size to 8 bits and the frame count to the transfer size. */
+    MSS_SPI(s)->control &= ~(uint32_t)CTRL_ENABLE_MASK;
+    MSS_SPI(s)->control = (MSS_SPI(s)->control & ~TXRXDFCOUNT_MASK) |
+							( (frame_count << TXRXDFCOUNT_SHIFT) & TXRXDFCOUNT_MASK);
+    MSS_SPI(s)->txrxdf_size = 8;
+    MSS_SPI(s)->control |= CTRL_ENABLE_MASK;
+
+    /* Flush the receive FIFO. */
+    rx_fifo_empty = MSS_SPI(s)->status & RX_FIFO_EMPTY_MASK;
+    while(0u == rx_fifo_empty)
+    {
+        rx_raw = MSS_SPI(s)->rx_data;
+        rx_fifo_empty = MSS_SPI(s)->status & RX_FIFO_EMPTY_MASK;
+    }
+    
+    tx_idx = 0u;
+    rx_idx = 0u;
+    if(tx_idx < cmd_byte_size)
+    {
+        MSS_SPI(s)->tx_data = cmd_buffer[tx_idx];
+        ++tx_idx;
+        ++transit;
+    }
+    else
+    {
+        if(tx_idx < transfer_size)
+        {
+            MSS_SPI(s)->tx_data = 0x00u;
+            ++tx_idx;
+            ++transit;
+        }
+    }
+    /* Perform the remainder of the transfer by sending a byte every time a byte
+     * has been received. This should ensure that no Rx overflow can happen in
+     * case of an interrupt occurs during this function. */
+    while(transfer_idx < transfer_size)
+    {
+        rx_fifo_empty = MSS_SPI(s)->status & RX_FIFO_EMPTY_MASK;
+        if(0u == rx_fifo_empty)
+        {
+            /* Process received byte. */
+            rx_raw = MSS_SPI(s)->rx_data;
+            if(transfer_idx >= cmd_byte_size)
+            {
+                if(rx_idx < rd_byte_size)
+                {
+                    rd_buffer[rx_idx] = (unsigned char)rx_raw;   
+                }
+                ++rx_idx;
+            }
+            ++transfer_idx;
+            --transit;
+        }
+
+        tx_fifo_full = MSS_SPI(s)->status & TX_FIFO_FULL_MASK;
+        if(0u == tx_fifo_full)
+        {
+            if(transit < RX_FIFO_SIZE)
+            {
+                /* Send another byte. */
+                if(tx_idx < cmd_byte_size)
+                {
+                    MSS_SPI(s)->tx_data = cmd_buffer[tx_idx];
+                    ++tx_idx;
+                    ++transit;
+                }
+                else
+                {
+                    if(tx_idx < transfer_size)
+                    {
+                        MSS_SPI(s)->tx_data = 0x00u;
+                        ++tx_idx;
+                        ++transit;
+                    }
+                }
+            }
+        }
+    }
+}
+
 /*
  * Perform an SPI transfer
  * @param slv		SPI slave
@@ -596,12 +794,21 @@ int spi_xfer(struct spi_slave *slv, unsigned int bl,
 	} xfer_arr[32];
 	static int xfer_len;
 	static int xfer_ttl;
+#if 0
 	static u8 dummy;
 
 	int i, btx, brx, ret = 0;
 	void *p;
-	struct m2s_spi_slave *s = to_m2s_spi(slv);
 	volatile struct mss_pdma_chan *chan;
+#endif
+	int i, ret = 0;
+	struct m2s_spi_slave *s = to_m2s_spi(slv);
+	unsigned int cmd_length = 0;
+	unsigned int resp_length = 0;
+	unsigned char *cmd_buff = NULL;
+	unsigned char *resp_buff = NULL;
+	unsigned int cmdlen = 0;
+	unsigned int resplen = 0;
 
 	/*
 	 * If this is a first transfer in a transaction, reset
@@ -649,6 +856,43 @@ int spi_xfer(struct spi_slave *slv, unsigned int bl,
 	 */
 	spi_m2s_hw_tfsz_set(s, xfer_ttl);
 
+	for (i = 0; i <= xfer_len; i++) {
+		if (xfer_arr[i].dout)
+			cmd_length += xfer_arr[i].len; 
+		if (xfer_arr[i].din)
+			resp_length += xfer_arr[i].len; 
+	}
+
+//	printf("cmdlen=%d, resplen=%d\n", cmd_length, resp_length);
+
+	if (cmd_length)
+		cmd_buff = malloc(cmd_length);
+	if (resp_length)
+		resp_buff = malloc(resp_length);
+
+	for (i = 0; i <= xfer_len; i++) {
+		if (xfer_arr[i].din == NULL) {
+			memcpy(cmd_buff + cmdlen, xfer_arr[i].dout,
+					xfer_arr[i].len);
+			cmdlen += xfer_arr[i].len;
+		}
+		if (xfer_arr[i].dout == NULL) {
+			memcpy(resp_buff + resplen, xfer_arr[i].din,
+					xfer_arr[i].len);
+			resplen += xfer_arr[i].len;
+		}
+	}
+
+	MSS_SPI_transfer_block(s, cmd_buff, cmd_length, resp_buff, resp_length);
+
+//	MSS_SPI(s)->slave_select = 0;
+
+	if (resp_length) {
+		memcpy(xfer_arr[xfer_len].din, resp_buff, resp_length);
+		free(resp_buff);
+	}
+	free(cmd_buff);
+#if 0
 	/*
 	 * We don't use double buffering scheme, because we should be able to
 	 * change ADDR_INC value in each xfer_arr[i] transaction (to set it to
@@ -707,7 +951,7 @@ int spi_xfer(struct spi_slave *slv, unsigned int bl,
 		 */
 		while (!(MSS_PDMA->chan[s->drx].status & (1 << brx)));
 	}
-
+#endif
 #if defined(SPI_M2S_DEBUG)
 	pdma_dump("xfer done", s->drx, s->dtx);
 	for (i = 0; i <= xfer_len; i++) {
@@ -719,7 +963,7 @@ int spi_xfer(struct spi_slave *slv, unsigned int bl,
 	}
 #endif
 done:
-	d_printk(3, "slv=%p,bl=%d,fl=0x%lx\n", slv, bl,fl);
+//	printf("cmdlen=%d, resplen=%d\n", cmd_length, resp_length);
 	return ret;
 }
 

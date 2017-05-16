@@ -198,6 +198,7 @@
  * with 64K alignment
  */
 #define CONFIG_ENV_IMG_OFFSET		0x10000
+#define CONFIG_SPI_DTB_OFFSET		0x2000
 
 /*
  * Serial console configuration: MSS UART1
@@ -280,6 +281,7 @@
 #undef CONFIG_CMD_SOMTEST
 #if defined(CONFIG_SPI_FLASH)
 #define CONFIG_CMD_SF
+#define CONFIG_CMD_M2S_SPI_TEST
 #endif
 
 /*
@@ -295,7 +297,7 @@
 /*
  * Auto-boot sequence configuration
  */
-#define CONFIG_BOOTDELAY		3
+#define CONFIG_BOOTDELAY		0
 #define CONFIG_ZERO_BOOTDELAY_CHECK
 #define CONFIG_HOSTNAME			m2s-fg484-som
 #define CONFIG_BOOTARGS			"m2s_platform=m2s-fg484-som "\
@@ -310,18 +312,21 @@
  * place.
  */
 #define UIMAGE_LOADADDR			0xA0007FC0
+#define DTB_ADDR				0xA0000200
 
 /*
  * Short-cuts to some useful commands (macros)
  */
 #define CONFIG_EXTRA_ENV_SETTINGS				\
 	"loadaddr=" MK_STR(UIMAGE_LOADADDR) "\0"		\
+	"dtbaddr=" MK_STR(DTB_ADDR) "\0"		\
 	"args=setenv bootargs " CONFIG_BOOTARGS "\0"		\
 	"ethaddr=C0:B1:3C:83:83:83\0"				\
 	"ipaddr=172.17.4.219\0"					\
 	"serverip=172.17.0.1\0"					\
 	"image=networking.uImage\0"				\
 	"spiaddr=" MK_STR(CONFIG_ENV_IMG_OFFSET) "\0"		\
+	"spidtbaddr=" MK_STR(CONFIG_SPI_DTB_OFFSET) "\0"		\
 	"spisize=400000\0"					\
 	"spiprobe=sf probe " MK_STR(CONFIG_SPI_FLASH_BUS) "\0"	\
 	"addip=setenv bootargs ${bootargs}"			\
@@ -329,6 +334,7 @@
 	"${netmask}:${hostname}:eth0:off\0"			\
 	"flashboot=run args addip;run spiprobe;"		\
 	" sf read ${loadaddr} ${spiaddr} ${spisize};"		\
+	" sf read ${dtbaddr} ${spidtbaddr} 2000;"		\
 	" bootm ${loadaddr}\0"					\
 	"netboot=tftp ${loadaddr} ${image};run args addip;bootm\0"	\
 	"update=tftp ${loadaddr} ${image};run spiprobe;"	\

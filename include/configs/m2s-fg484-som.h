@@ -34,12 +34,14 @@
 /*
  * Disable debug messages
  */
-#undef DEBUG
+//#undef DEBUG
 
 /*
  * This is an ARM Cortex-M3 CPU core
  */
 #define CONFIG_SYS_ARMCORTEXM3
+
+#define CONFIG_ARMCORTEXM3_SYSTICK_CPU
 
 /*
  * This is the Actel SmartFusion2 (aka M2S) device
@@ -297,7 +299,7 @@
 /*
  * Auto-boot sequence configuration
  */
-#define CONFIG_BOOTDELAY		0
+#define CONFIG_BOOTDELAY		3
 #define CONFIG_ZERO_BOOTDELAY_CHECK
 #define CONFIG_HOSTNAME			m2s-fg484-som
 #define CONFIG_BOOTARGS			"m2s_platform=m2s-fg484-som "\

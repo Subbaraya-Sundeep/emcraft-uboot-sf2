@@ -64,8 +64,8 @@
 /*
  * Just more compact names
  */
-#define M2S_TX_BD_NUM		1
-#define M2S_RX_BD_NUM		CONFIG_SYS_RX_ETH_BUFFER
+#define M2S_TX_BD_NUM		4
+#define M2S_RX_BD_NUM		2
 
 /*
  * Different timeouts, in msec
